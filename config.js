@@ -1,6 +1,7 @@
 // ===========================
 // GAME CONFIGURATION
 // ===========================
+console.log('config.js loaded');
 // Adjust these parameters to customize the game behavior
 
 const CONFIG = {
@@ -13,22 +14,25 @@ const CONFIG = {
   ACCEL: 200,              // Acceleration when pressing keys
   INERTIA: 0.95,           // Momentum (0-1, higher = more slippery/momentum, lower = tighter control)
   MAX_SPEED: 10,           // Maximum velocity
-  TERRAIN_SPEED_MULTIPLIER: 0.45, // Speed multiplier while sailing on brown terrain
+  // ships move more slowly on terrain; all other physics (inertia, drift) remain unchanged
+  TERRAIN_SPEED_MULTIPLIER: 0.5, // Speed multiplier while sailing on brown terrain (50% speed)
 
   // Obstacles
+  // starting count of terrain pixels; will be multiplied by REDUCTION_FACTOR when a round begins
   OBSTACLE_STARTING_PIXELS: 30, // Total number of pixels of obstacles at start
+  OBSTACLE_STARTING_REDUCTION: 0.75, // Fraction of the starting pixels actually placed (25% fewer terrain)
   OBSTACLE_PIXEL_DECREMENT: 3,  // Number of pixels to decrease per cycle
   OBSTACLE_MIN_SEP: 3,     // Minimum separation between obstacles (in nodes)
-  OBSTACLE_MIN_SIZE: 2,    // Minimum size of obstacle blob (in pixels)
+  OBSTACLE_MIN_SIZE: 3,    // Minimum size of obstacle blob (in pixels)
   OBSTACLE_MAX_SIZE: 4,    // Maximum size of obstacle blob (in pixels)
 
   // Weather Phase Timing (in milliseconds)
-  CALM_MIN_MS: 2000,                 // Calm phase min duration
-  CALM_MAX_MS: 4500,                 // Calm phase max duration
-  STORM_COMING_MIN_MS: 1500,         // Storm-coming phase min duration
-  STORM_COMING_MAX_MS: 2600,         // Storm-coming phase max duration
-  STORM_MIN_MS: 1200,                // Storm phase min duration
-  STORM_MAX_MS: 2200,                // Storm phase max duration
+  CALM_MIN_MS: 3000,                 // Calm phase min duration
+  CALM_MAX_MS: 5000,                 // Calm phase max duration
+  STORM_COMING_MIN_MS: 3000,         // Storm-coming phase min duration
+  STORM_COMING_MAX_MS: 5000,         // Storm-coming phase max duration
+  STORM_MIN_MS: 3000,                // Storm phase min duration
+  STORM_MAX_MS: 5000,                // Storm phase max duration
 
   // Weather Flicker Speeds (smaller = faster)
   STORM_COMING_FLICKER_MS: 220,      // Slow flicker speed for storm-coming phase
@@ -45,6 +49,9 @@ const CONFIG = {
   TREASURE_SPAWN_MIN_MS: 1200,       // Minimum delay before treasure appears each round
   TREASURE_SPAWN_MAX_MS: 3500,       // Maximum delay before treasure appears each round
 
+  // Special event timings
+  CALM_EXTRA_ON_TREASURE_MS: 3000,   // Additional calm period awarded immediately after treasure is claimed
+
   // Match Flow
   BEST_OF_ROUNDS: 5,
   ROUND_TRANSITION_SECONDS: 2.0,
@@ -52,6 +59,14 @@ const CONFIG = {
   // Visual Settings
   CANVAS_WIDTH: 800,
   CANVAS_HEIGHT: 800,
+
+  // Sound
+  // value between 0 (mute) and 1 (full volume)
+  SOUND_VOLUMES: {
+    CALM: 1.0,
+    STORM_COMING: 0.5,
+    STORM: 0.5
+  },
 
   // Colors
   COLORS: {

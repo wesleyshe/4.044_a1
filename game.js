@@ -2,6 +2,17 @@
 // GAME STATE AND LOGIC
 // ===========================
 
+// audio handles (loaded in setup to avoid preload issues)
+let weatherSounds = {};
+
+// diagnostics
+let lastFatalError = null;
+window.onerror = function (message, source, lineno, colno, error) {
+  console.error('Global error caught', message, source, lineno, colno, error);
+  lastFatalError = message || (error && error.toString());
+};
+
+
 let gameState = 'PLAYING'; // PLAYING, ROUND_END, MATCH_END
 let obstacles = [];
 let players = [];
@@ -42,9 +53,10 @@ function generateObstacles() {
 
   for (let attempts = 0; attempts < maxAttempts && currentPixels < currentTotalPixels; attempts++) {
     let remainingPixels = currentTotalPixels - currentPixels;
+    if (remainingPixels < CONFIG.OBSTACLE_MIN_SIZE) break;
+
     let blobSize = Math.floor(randomRange(CONFIG.OBSTACLE_MIN_SIZE, CONFIG.OBSTACLE_MAX_SIZE + 1));
     blobSize = Math.min(blobSize, remainingPixels);
-    if (blobSize < 1) break;
 
     let startNode = Math.floor(Math.random() * CONFIG.TRACK_LEN);
 
@@ -110,26 +122,57 @@ function scheduleTreasureSpawn() {
 }
 
 function pickTreasureNode() {
-  let playerNodes = players.map(player => player.getCurrentNode());
-  let forbiddenNodes = [players[0].startNode, players[1].startNode, ...playerNodes];
-  let validNodes = [];
+  let p1 = players[0].getCurrentNode();
+  let p2 = players[1].getCurrentNode();
+
+  // always forbid player positions (and their start nodes) entirely
+  let forbiddenNodes = [players[0].startNode, players[1].startNode, p1, p2];
+  let candidates = [];
 
   for (let node = 0; node < CONFIG.TRACK_LEN; node++) {
     if (forbiddenNodes.includes(node)) continue;
     if (isTerrainNode(node)) continue;
-    validNodes.push(node);
+    candidates.push(node);
   }
 
-  if (validNodes.length === 0) {
+  if (candidates.length === 0) {
     treasureNode = -1;
     return;
   }
 
-  treasureNode = validNodes[Math.floor(Math.random() * validNodes.length)];
+  // determine the longest arc between the two players
+  let distCW = circularDistanceCW(p1, p2);
+  let distCCW = circularDistanceCW(p2, p1);
+  let arcStart, arcLen;
+  if (distCW >= distCCW) {
+    arcStart = p1;
+    arcLen = distCW;
+  } else {
+    arcStart = p2;
+    arcLen = distCCW;
+  }
+
+  // calculate middle third of that arc
+  let third = Math.floor(arcLen / 3);
+  let zoneStart = wrapIndex(arcStart + third);
+  let zoneLen = Math.max(0, arcLen - 2 * third);
+
+  // build set of allowed nodes inside the middle third
+  let zoneSet = new Set();
+  for (let i = 0; i < zoneLen; i++) {
+    zoneSet.add(wrapIndex(zoneStart + i));
+  }
+
+  // filter candidates to those falling inside the zone, if any
+  let validZone = candidates.filter(n => zoneSet.has(n));
+  let usable = validZone.length > 0 ? validZone : candidates;
+
+  treasureNode = usable[Math.floor(Math.random() * usable.length)];
 }
 
 function updateTreasureSpawn(dt) {
   if (treasureNode !== -1) return;
+  if (weatherState !== 'CALM') return;
 
   treasureSpawnTimer += dt;
   if (treasureSpawnTimer >= treasureSpawnDelay) {
@@ -153,10 +196,31 @@ function setWeatherState(nextState) {
   } else {
     weatherPhaseDuration = randomRange(CONFIG.STORM_MIN_MS, CONFIG.STORM_MAX_MS) / 1000;
   }
+
+  // sound handling: keep all tracks playing to avoid transition gaps, toggle volume
+  Object.entries(weatherSounds).forEach(([key, s]) => {
+    try {
+      if (s && typeof s.loop === 'function') {
+        if (!s._startedLooping) {
+          s.loop();
+          s._startedLooping = true;
+        }
+        if (key === nextState) {
+          s.setVolume(CONFIG.SOUND_VOLUMES[key] !== undefined ? CONFIG.SOUND_VOLUMES[key] : 0.5);
+        } else {
+          s.setVolume(0);
+        }
+      }
+    } catch (_) { }
+  });
 }
 
-function resetWeatherCycle() {
+function resetWeatherCycle(extraCalmMs = 0) {
   setWeatherState('CALM');
+  if (extraCalmMs > 0) {
+    // convert milliseconds to seconds (weatherPhaseDuration stored in seconds)
+    weatherPhaseDuration += extraCalmMs / 1000;
+  }
 }
 
 function resolveStormStrike() {
@@ -210,12 +274,13 @@ function getWinsToClaim() {
   return Math.floor(CONFIG.BEST_OF_ROUNDS / 2) + 1;
 }
 
-function startRound() {
+function startRound(extraCalmMs = 0) {
   gameState = 'PLAYING';
   winner = null;
   endReason = '';
   roundTransitionTimer = 0;
-  currentTotalPixels = CONFIG.OBSTACLE_STARTING_PIXELS;
+  // apply global reduction factor so there are 25% fewer terrain pixels than the base value
+  currentTotalPixels = Math.floor(CONFIG.OBSTACLE_STARTING_PIXELS * (CONFIG.OBSTACLE_STARTING_REDUCTION || 1));
 
   let clockwiseNode = 1;
   let counterclockwiseNode = CONFIG.TRACK_LEN - 1;
@@ -230,7 +295,7 @@ function startRound() {
   ];
 
   scheduleTreasureSpawn();
-  resetWeatherCycle();
+  resetWeatherCycle(extraCalmMs);
   generateDistinctRoundTerrain();
 }
 
@@ -241,7 +306,7 @@ function startMatch() {
   startRound();
 }
 
-function concludeRound(roundWinner, reason, startNextRoundNow = false) {
+function concludeRound(roundWinner, reason, startNextRoundNow = false, extraCalmMs = 0) {
   if (gameState !== 'PLAYING') return;
 
   if (roundWinner === 'red ship') redShipWins += 1;
@@ -270,7 +335,7 @@ function concludeRound(roundWinner, reason, startNextRoundNow = false) {
   }
 
   if (startNextRoundNow) {
-    startRound();
+    startRound(extraCalmMs);
     return;
   }
 
@@ -287,11 +352,11 @@ function checkRoundWinConditions() {
   let p2Win = players[1].isAlive && players[1].checkTreasureWin(treasureNode);
 
   if (p1Win && p2Win) {
-    concludeRound('draw', 'both ships seized the treasure', true);
+    concludeRound('draw', 'both ships seized the treasure', true, CONFIG.CALM_EXTRA_ON_TREASURE_MS);
   } else if (p1Win) {
-    concludeRound('red ship', 'seized the treasure', true);
+    concludeRound('red ship', 'seized the treasure', true, CONFIG.CALM_EXTRA_ON_TREASURE_MS);
   } else if (p2Win) {
-    concludeRound('green ship', 'seized the treasure', true);
+    concludeRound('green ship', 'seized the treasure', true, CONFIG.CALM_EXTRA_ON_TREASURE_MS);
   }
 }
 
@@ -309,16 +374,62 @@ function updateRoundTransition(dt) {
 // ===========================
 
 function setup() {
-  createCanvas(CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
-  textAlign(CENTER, CENTER);
-  textFont('Consolas');
-  startMatch();
+  console.log('setup() start');
+  try {
+    createCanvas(CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+    textAlign(CENTER, CENTER);
+    textFont('Consolas');
+
+    // load sounds non‑blocking; failures won't prevent setup
+    if (typeof soundFormats === 'function') {
+      try { soundFormats('mp3'); } catch (_) { }
+    }
+    if (typeof loadSound === 'function') {
+      try {
+        weatherSounds.CALM = loadSound('public/calm.mp3', () => { }, err => console.warn(err));
+        weatherSounds.STORM_COMING = loadSound('public/storm coming.mp3', () => { }, err => console.warn(err));
+        weatherSounds.STORM = loadSound('public/storm.mp3', () => { }, err => console.warn(err));
+      } catch (e) {
+        console.warn('exception loading sounds in setup', e);
+      }
+    }
+
+    startMatch();
+  } catch (e) {
+    console.error('error in setup()', e);
+    lastFatalError = e.toString();
+  }
+}
+
+function mousePressed() {
+  if (getAudioContext().state !== 'running') {
+    userStartAudio();
+    // Restart weather state to kickstart loop with correct volume if it was blocked
+    setWeatherState(weatherState);
+  }
 }
 
 function draw() {
+  if (lastFatalError) {
+    background(0);
+    fill(255, 0, 0);
+    textSize(24);
+    text('Fatal error: ' + lastFatalError, width / 2, height / 2);
+    noLoop();
+    return;
+  }
+  console.log('draw() frame', frameCount);
   background(CONFIG.COLORS.background);
+  // debug marker: small red square so we know draw() executed
+  fill(255, 0, 0);
+  rect(5, 5, 10, 10);
 
   let dt = deltaTime / 1000;
+
+  // debugging: if both ships are concealed by terrain, log their positions
+  if (players.length >= 2 && players[0].isHidden(obstacles) && players[1].isHidden(obstacles)) {
+    console.log('both ships on terrain at nodes', players[0].getCurrentNode(), players[1].getCurrentNode());
+  }
 
   if (gameState === 'PLAYING') {
     updateWeather(dt);
@@ -352,6 +463,12 @@ function draw() {
 function keyPressed() {
   if (gameState === 'MATCH_END' && (key === 'r' || key === 'R')) {
     startMatch();
+  }
+
+  // Ensure audio starts if blocked by browser policy
+  if (getAudioContext().state !== 'running') {
+    userStartAudio();
+    setWeatherState(weatherState);
   }
 
   // Prevent default for arrow keys

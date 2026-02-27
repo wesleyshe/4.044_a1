@@ -1,6 +1,7 @@
 // ===========================
 // PLAYER CLASS
 // ===========================
+console.log('player.js loaded');
 
 class Player {
   constructor(startNode, color, name, leftKey, rightKey) {
@@ -35,13 +36,15 @@ class Player {
   update(dt, obstacles, weatherState = 'CALM', weatherPhaseProgress = 0) {
     if (!this.isAlive) return;
     let onTerrain = this.isHidden(obstacles);
-    let terrainSpeedMultiplier = onTerrain ? CONFIG.TERRAIN_SPEED_MULTIPLIER : 1.0;
-    let accelMultiplier = terrainSpeedMultiplier;
-    let maxSpeedMultiplier = terrainSpeedMultiplier;
+
+    // base multipliers stem from terrain; ships on terrain move slower but otherwise behave normally
+    let accelMultiplier = onTerrain ? CONFIG.TERRAIN_SPEED_MULTIPLIER : 1.0;
+    let maxSpeedMultiplier = onTerrain ? CONFIG.TERRAIN_SPEED_MULTIPLIER : 1.0;
     let inertia = CONFIG.INERTIA;
     let driftVelocity = 0;
 
-    if (weatherState === 'STORM_COMING') {
+    // only apply storm‑coming behaviour when the player is in open water
+    if (!onTerrain && weatherState === 'STORM_COMING') {
       let stormIntensity = 0.25 + 0.75 * weatherPhaseProgress;
       accelMultiplier *= lerp(1, CONFIG.STORM_COMING_ACCEL_MULTIPLIER, stormIntensity);
       maxSpeedMultiplier *= lerp(1, CONFIG.STORM_COMING_MAX_SPEED_MULTIPLIER, stormIntensity);
@@ -68,6 +71,13 @@ class Player {
 
     let oldPosition = this.position;
     let newPosition = this.position + this.velocity * dt;
+
+    // sanity: prevent NaN/Infinity creeping in
+    if (!isFinite(newPosition) || isNaN(newPosition)) {
+      console.warn('player position became invalid, resetting', this.name, newPosition);
+      newPosition = this.startNode;
+      this.velocity = 0;
+    }
 
     this.position = newPosition;
     this.totalDistance += Math.abs(newPosition - oldPosition);
@@ -96,6 +106,26 @@ class Player {
 
   draw() {
     if (!this.isAlive) return;
-    drawSquarePixel(this.getCurrentNode(), this.color, 1.0);
+
+    const node = this.getCurrentNode();
+    const hidden = this.isHidden(obstacles);
+
+    // always draw the ship, even if hidden; add an outline when on terrain so it
+    // remains visible in case both players hide simultaneously
+    drawSquarePixel(node, this.color, 1.0);
+
+    if (hidden) {
+      // outline
+      push();
+      let pos = getPixelPosition(node);
+      translate(pos.x, pos.y);
+      rotate(pos.angle + HALF_PI);
+      noFill();
+      stroke(this.color);
+      strokeWeight(2);
+      rectMode(CENTER);
+      square(0, 0, CONFIG.PIXEL_SIZE + 2);
+      pop();
+    }
   }
 }

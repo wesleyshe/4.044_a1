@@ -1,6 +1,7 @@
 // ===========================
 // RENDERING FUNCTIONS
 // ===========================
+console.log('renderer.js loaded');
 
 function blendColor(from, to, amount) {
   return [
