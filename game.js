@@ -2,30 +2,40 @@
 // GAME STATE AND LOGIC
 // ===========================
 
-let gameState = 'START'; // START, PLAYING, END
-let lightState = 'GREEN'; // GREEN, YELLOW, RED
-let lightTimer = 0;
-let lightDuration = 0;
+let gameState = 'PLAYING'; // PLAYING, ROUND_END, MATCH_END
 let obstacles = [];
 let players = [];
 let winner = null;
 let endReason = '';
 let currentTotalPixels = 0;
-let crossingSound;
-let waitingSound;
 
-function preload() {
-  crossingSound = loadSound('public/Crossing.mp3');
-  waitingSound = loadSound('public/Waiting.mp3');
-}
+let treasureNode = -1;
+let treasureSpawnTimer = 0;
+let treasureSpawnDelay = 0;
+
+let weatherState = 'CALM'; // CALM, STORM_COMING, STORM
+let weatherTimer = 0;
+let weatherPhaseDuration = 0;
+let weatherPhaseProgress = 0;
+let roundTransitionTimer = 0;
+let previousRoundTerrainSignature = '';
+
+let redShipWins = 0;
+let greenShipWins = 0;
+let roundsPlayed = 0;
 
 // ===========================
 // OBSTACLE GENERATION
 // ===========================
 
+function isTerrainNode(node) {
+  return obstacles.some(obs => obs.nodes.some(n => n.index === node));
+}
+
 function generateObstacles() {
   obstacles = [];
-  let forbiddenNodes = [0, players[0].startNode, players[1].startNode];
+  let playerNodes = players.map(player => player.getCurrentNode());
+  let forbiddenNodes = [treasureNode, ...playerNodes, players[0].startNode, players[1].startNode];
   let maxAttempts = 1000;
   let currentPixels = 0;
   let nextId = 1;
@@ -56,88 +66,155 @@ function generateObstacles() {
     if (!tooClose) {
       obstacles.push({
         id: nextId++,
-        nodes: blob.map(n => ({ index: n, isBreathing: false, breathingTimer: 0 }))
+        nodes: blob.map(n => ({ index: n }))
       });
       currentPixels += blobSize;
     }
   }
 }
 
-// ===========================
-// LIGHT STATE MACHINE
-// ===========================
-
-function updateLightState(dt) {
-  lightTimer += dt;
-
-  if (lightTimer >= lightDuration) {
-    switchLightState();
+function getTerrainSignature() {
+  let nodes = new Array(CONFIG.TRACK_LEN).fill('0');
+  for (let obs of obstacles) {
+    for (let nodeObj of obs.nodes) {
+      nodes[nodeObj.index] = '1';
+    }
   }
+  return nodes.join('');
 }
 
-function switchLightState() {
-  if (lightState === 'GREEN') {
-    lightState = 'BREATHING_GREEN';
-    let targetDuration = randomRange(CONFIG.BREATHING_GREEN_MIN_MS, CONFIG.BREATHING_GREEN_MAX_MS) / 1000;
-    lightDuration = Math.max(1, Math.round(targetDuration / CONFIG.AUDIO_WAITING_DURATION)) * CONFIG.AUDIO_WAITING_DURATION;
-    lightTimer = 0;
+function generateDistinctRoundTerrain() {
+  let nextSignature = '';
+  let maxAttempts = 30;
 
-    crossingSound.stop();
-    if (!waitingSound.isPlaying()) waitingSound.play();
-  } else if (lightState === 'BREATHING_GREEN') {
-    lightState = 'RED';
-    let targetDuration = randomRange(CONFIG.RED_MIN_MS, CONFIG.RED_MAX_MS) / 1000;
-    lightDuration = Math.max(1, Math.round(targetDuration / CONFIG.AUDIO_WAITING_DURATION)) * CONFIG.AUDIO_WAITING_DURATION;
-    lightTimer = 0;
-    checkRedLightLoss();
-
-    crossingSound.stop();
-    if (!waitingSound.isPlaying()) waitingSound.play();
-  } else if (lightState === 'RED') {
-    lightState = 'GREEN';
-    let targetDuration = randomRange(CONFIG.GREEN_MIN_MS, CONFIG.GREEN_MAX_MS) / 1000;
-    lightDuration = Math.max(1, Math.round(targetDuration / CONFIG.AUDIO_CROSSING_DURATION)) * CONFIG.AUDIO_CROSSING_DURATION;
-    lightTimer = 0;
-    currentTotalPixels = Math.max(1, currentTotalPixels - CONFIG.OBSTACLE_PIXEL_DECREMENT);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     generateObstacles();
+    nextSignature = getTerrainSignature();
 
-    waitingSound.stop();
-    if (!crossingSound.isPlaying()) crossingSound.play();
+    if (previousRoundTerrainSignature === '' || nextSignature !== previousRoundTerrainSignature) {
+      break;
+    }
   }
+
+  previousRoundTerrainSignature = nextSignature;
 }
 
-function checkRedLightLoss() {
-  let p1Hidden = players[0].isHidden(obstacles);
-  let p2Hidden = players[1].isHidden(obstacles);
+// ===========================
+// TREASURE LOGIC
+// ===========================
 
-  if (!p1Hidden && !p2Hidden) {
-    players[0].isAlive = false;
-    players[1].isAlive = false;
-    endGame('draw', 'both players caught by red light');
-  } else if (!p1Hidden) {
-    players[0].isAlive = false;
-    endGame(players[1].name, players[0].name.toLowerCase() + ' caught by red light');
-  } else if (!p2Hidden) {
-    players[1].isAlive = false;
-    endGame(players[0].name, players[1].name.toLowerCase() + ' caught by red light');
+function scheduleTreasureSpawn() {
+  treasureNode = -1;
+  treasureSpawnTimer = 0;
+  treasureSpawnDelay = randomRange(CONFIG.TREASURE_SPAWN_MIN_MS, CONFIG.TREASURE_SPAWN_MAX_MS) / 1000;
+}
+
+function pickTreasureNode() {
+  let playerNodes = players.map(player => player.getCurrentNode());
+  let forbiddenNodes = [players[0].startNode, players[1].startNode, ...playerNodes];
+  let validNodes = [];
+
+  for (let node = 0; node < CONFIG.TRACK_LEN; node++) {
+    if (forbiddenNodes.includes(node)) continue;
+    if (isTerrainNode(node)) continue;
+    validNodes.push(node);
+  }
+
+  if (validNodes.length === 0) {
+    treasureNode = -1;
+    return;
+  }
+
+  treasureNode = validNodes[Math.floor(Math.random() * validNodes.length)];
+}
+
+function updateTreasureSpawn(dt) {
+  if (treasureNode !== -1) return;
+
+  treasureSpawnTimer += dt;
+  if (treasureSpawnTimer >= treasureSpawnDelay) {
+    pickTreasureNode();
   }
 }
 
 // ===========================
-// GAME FLOW
+// WEATHER LOGIC
 // ===========================
 
-function startGame() {
+function setWeatherState(nextState) {
+  weatherState = nextState;
+  weatherTimer = 0;
+  weatherPhaseProgress = 0;
+
+  if (nextState === 'CALM') {
+    weatherPhaseDuration = randomRange(CONFIG.CALM_MIN_MS, CONFIG.CALM_MAX_MS) / 1000;
+  } else if (nextState === 'STORM_COMING') {
+    weatherPhaseDuration = randomRange(CONFIG.STORM_COMING_MIN_MS, CONFIG.STORM_COMING_MAX_MS) / 1000;
+  } else {
+    weatherPhaseDuration = randomRange(CONFIG.STORM_MIN_MS, CONFIG.STORM_MAX_MS) / 1000;
+  }
+}
+
+function resetWeatherCycle() {
+  setWeatherState('CALM');
+}
+
+function resolveStormStrike() {
+  let p1InOcean = !players[0].isHidden(obstacles);
+  let p2InOcean = !players[1].isHidden(obstacles);
+
+  // Treasure that is currently in ocean gets swept away by the storm.
+  if (treasureNode !== -1 && !isTerrainNode(treasureNode)) {
+    scheduleTreasureSpawn();
+  }
+
+  if (p1InOcean) players[0].isAlive = false;
+  if (p2InOcean) players[1].isAlive = false;
+
+  if (p1InOcean && p2InOcean) {
+    concludeRound('draw', 'both ships were lost in the storm');
+  } else if (p1InOcean) {
+    concludeRound(players[1].name, 'survived the storm');
+  } else if (p2InOcean) {
+    concludeRound(players[0].name, 'survived the storm');
+  }
+}
+
+function updateWeather(dt) {
+  weatherTimer += dt;
+  weatherPhaseProgress = constrain(weatherTimer / weatherPhaseDuration, 0, 1);
+
+  if (weatherTimer < weatherPhaseDuration) return;
+
+  if (weatherState === 'CALM') {
+    setWeatherState('STORM_COMING');
+    return;
+  }
+
+  if (weatherState === 'STORM_COMING') {
+    resolveStormStrike();
+    if (gameState === 'PLAYING') {
+      setWeatherState('STORM');
+    }
+    return;
+  }
+
+  setWeatherState('CALM');
+}
+
+// ===========================
+// ROUND AND MATCH FLOW
+// ===========================
+
+function getWinsToClaim() {
+  return Math.floor(CONFIG.BEST_OF_ROUNDS / 2) + 1;
+}
+
+function startRound() {
   gameState = 'PLAYING';
-  lightState = 'GREEN';
-  lightTimer = 0;
-  let targetDuration = randomRange(CONFIG.GREEN_MIN_MS, CONFIG.GREEN_MAX_MS) / 1000;
-  lightDuration = Math.max(1, Math.round(targetDuration / CONFIG.AUDIO_CROSSING_DURATION)) * CONFIG.AUDIO_CROSSING_DURATION;
-
-  if (waitingSound.isPlaying()) waitingSound.stop();
-  crossingSound.play();
   winner = null;
   endReason = '';
+  roundTransitionTimer = 0;
   currentTotalPixels = CONFIG.OBSTACLE_STARTING_PIXELS;
 
   let clockwiseNode = 1;
@@ -148,49 +225,82 @@ function startGame() {
   let player2Node = randomize ? counterclockwiseNode : clockwiseNode;
 
   players = [
-    new Player(player1Node, color(CONFIG.COLORS.player1), 'player 1', CONFIG.PLAYER1_LEFT, CONFIG.PLAYER1_RIGHT),
-    new Player(player2Node, color(CONFIG.COLORS.player2), 'player 2', CONFIG.PLAYER2_LEFT, CONFIG.PLAYER2_RIGHT)
+    new Player(player1Node, color(CONFIG.COLORS.player1), 'red ship', CONFIG.PLAYER1_LEFT, CONFIG.PLAYER1_RIGHT),
+    new Player(player2Node, color(CONFIG.COLORS.player2), 'green ship', CONFIG.PLAYER2_LEFT, CONFIG.PLAYER2_RIGHT)
   ];
 
-  generateObstacles();
+  scheduleTreasureSpawn();
+  resetWeatherCycle();
+  generateDistinctRoundTerrain();
 }
 
-function endGame(winnerName, reason) {
-  gameState = 'END';
-  winner = winnerName;
+function startMatch() {
+  redShipWins = 0;
+  greenShipWins = 0;
+  roundsPlayed = 0;
+  startRound();
+}
+
+function concludeRound(roundWinner, reason, startNextRoundNow = false) {
+  if (gameState !== 'PLAYING') return;
+
+  if (roundWinner === 'red ship') redShipWins += 1;
+  if (roundWinner === 'green ship') greenShipWins += 1;
+
+  roundsPlayed += 1;
+
+  let winsToClaim = getWinsToClaim();
+  let matchDone = redShipWins >= winsToClaim || greenShipWins >= winsToClaim || roundsPlayed >= CONFIG.BEST_OF_ROUNDS;
+
+  if (matchDone) {
+    gameState = 'MATCH_END';
+
+    if (redShipWins > greenShipWins) {
+      winner = 'red ship';
+      endReason = 'wins the match ' + redShipWins + '-' + greenShipWins;
+    } else if (greenShipWins > redShipWins) {
+      winner = 'green ship';
+      endReason = 'wins the match ' + greenShipWins + '-' + redShipWins;
+    } else {
+      winner = 'draw';
+      endReason = 'match tied after five rounds';
+    }
+
+    return;
+  }
+
+  if (startNextRoundNow) {
+    startRound();
+    return;
+  }
+
+  gameState = 'ROUND_END';
+  winner = roundWinner;
   endReason = reason;
-
-  crossingSound.stop();
-  waitingSound.stop();
+  roundTransitionTimer = 0;
 }
 
-function checkWinConditions() {
-  let bothDead = !players[0].isAlive && !players[1].isAlive;
+function checkRoundWinConditions() {
+  if (treasureNode === -1) return;
 
-  if (bothDead && winner === null) {
-    endGame('draw', 'both players eliminated');
-    return;
-  }
-
-  if (!players[0].isAlive && winner === null) {
-    endGame(players[1].name, players[0].name.toLowerCase() + ' moved during red light');
-    return;
-  }
-
-  if (!players[1].isAlive && winner === null) {
-    endGame(players[0].name, players[1].name.toLowerCase() + ' moved during red light');
-    return;
-  }
-
-  let p1Win = players[0].checkWin(players[1]);
-  let p2Win = players[1].checkWin(players[0]);
+  let p1Win = players[0].isAlive && players[0].checkTreasureWin(treasureNode);
+  let p2Win = players[1].isAlive && players[1].checkTreasureWin(treasureNode);
 
   if (p1Win && p2Win) {
-    endGame('draw', 'both players reached the goal');
+    concludeRound('draw', 'both ships seized the treasure', true);
   } else if (p1Win) {
-    endGame(players[0].name, 'reached the goal');
+    concludeRound('red ship', 'seized the treasure', true);
   } else if (p2Win) {
-    endGame(players[1].name, 'reached the goal');
+    concludeRound('green ship', 'seized the treasure', true);
+  }
+}
+
+function updateRoundTransition(dt) {
+  if (gameState !== 'ROUND_END') return;
+
+  roundTransitionTimer += dt;
+  if (roundTransitionTimer >= CONFIG.ROUND_TRANSITION_SECONDS) {
+    startRound();
   }
 }
 
@@ -202,71 +312,46 @@ function setup() {
   createCanvas(CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
   textAlign(CENTER, CENTER);
   textFont('Consolas');
+  startMatch();
 }
 
 function draw() {
   background(CONFIG.COLORS.background);
 
-  if (gameState === 'START') {
-    drawStartScreen();
-  } else if (gameState === 'PLAYING') {
-    let dt = deltaTime / 1000;
-    updateLightState(dt);
+  let dt = deltaTime / 1000;
 
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-      let obs = obstacles[i];
-      for (let j = obs.nodes.length - 1; j >= 0; j--) {
-        let nodeObj = obs.nodes[j];
-        if (nodeObj.isBreathing) {
-          nodeObj.breathingTimer += dt;
-          if (nodeObj.breathingTimer >= CONFIG.BLOCK_BREATHING_DURATION) {
-            obs.nodes.splice(j, 1);
-          }
-        }
-      }
-      if (obs.nodes.length === 0) {
-        obstacles.splice(i, 1);
-      }
-    }
-
-    for (let player of players) {
-      player.update(dt, lightState, obstacles);
-    }
-
-    // Audio Sync Check
-    if (gameState === 'PLAYING') {
-      if (lightState === 'GREEN' && !crossingSound.isPlaying()) {
-        crossingSound.play();
-      } else if ((lightState === 'BREATHING_GREEN' || lightState === 'RED') && !waitingSound.isPlaying()) {
-        waitingSound.play();
-      }
-    }
-
-    checkWinConditions();
+  if (gameState === 'PLAYING') {
+    updateWeather(dt);
 
     if (gameState === 'PLAYING') {
-      drawTrack();
-      drawObstacles(obstacles);
-      players.forEach(p => p.draw());
-      drawTrafficLight(lightState);
-      drawHUD();
+      updateTreasureSpawn(dt);
+
+      for (let player of players) {
+        player.update(dt, obstacles, weatherState, weatherPhaseProgress);
+      }
+
+      checkRoundWinConditions();
     }
-  } else if (gameState === 'END') {
-    drawTrack();
-    drawObstacles(obstacles);
-    players.forEach(p => p.draw());
-    drawTrafficLight(lightState);
+  } else if (gameState === 'ROUND_END') {
+    updateRoundTransition(dt);
+  }
+
+  drawTrack(weatherState, weatherPhaseProgress);
+  drawObstacles(obstacles);
+  if (treasureNode !== -1) drawTreasure(treasureNode);
+  players.forEach(p => p.draw());
+  drawHUD(redShipWins, greenShipWins, roundsPlayed + (gameState === 'PLAYING' ? 1 : 0));
+
+  if (gameState === 'ROUND_END') {
+    drawRoundResult(winner, endReason);
+  } else if (gameState === 'MATCH_END') {
     drawEndScreen(winner, endReason);
   }
 }
 
 function keyPressed() {
-  if (gameState === 'START' && key === ' ') {
-    startGame();
-  }
-
-  if (gameState === 'END' && (key === 'r' || key === 'R')) {
-    startGame();
+  if (gameState === 'MATCH_END' && (key === 'r' || key === 'R')) {
+    startMatch();
   }
 
   // Prevent default for arrow keys
