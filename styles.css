@@ -1,14 +1,12 @@
 body {
   margin: 0;
   padding: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
+  overflow: hidden;
   background-color: #000000;
   font-family: 'Consolas', monospace;
 }
 
 canvas {
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  display: block;
+  image-rendering: pixelated;
 }

@@ -1,8 +1,6 @@
 // ===========================
 // UTILITY FUNCTIONS
 // ===========================
-console.log('utils.js loaded');
-
 /**
  * Wraps an index to the valid range [0, TRACK_LEN)
  */
@@ -39,8 +37,8 @@ function randomRange(min, max) {
  */
 function getPixelPosition(nodeIndex) {
   let angle = (nodeIndex / CONFIG.TRACK_LEN) * TWO_PI - HALF_PI;
-  let x = width / 2 + cos(angle) * CONFIG.RING_RADIUS;
-  let y = height / 2 + sin(angle) * CONFIG.RING_RADIUS;
+  let x = gameCenterX + cos(angle) * CONFIG.RING_RADIUS;
+  let y = gameCenterY + sin(angle) * CONFIG.RING_RADIUS;
   return { x, y, angle };
 }
 
@@ -48,12 +46,7 @@ function getPixelPosition(nodeIndex) {
  * Draws a square pixel at the given node index
  */
 function drawSquarePixel(nodeIndex, fillColor, scaleFactor = 1.0) {
-  // defensive: if index is not a finite number, skip drawing to avoid corrupting
-  // the transformation matrix (NaN translations can wipe out the frame).
-  if (!isFinite(nodeIndex) || isNaN(nodeIndex)) {
-    console.warn('drawSquarePixel called with invalid nodeIndex', nodeIndex);
-    return;
-  }
+  if (!isFinite(nodeIndex)) return;
 
   let pos = getPixelPosition(nodeIndex);
   push();

@@ -5,6 +5,16 @@
 // audio handles (loaded in setup to avoid preload issues)
 let weatherSounds = {};
 
+// UI overlay images (loaded in preload)
+let uiBackgroundImg, uiBorderImg, uiCompassImg;
+
+// game center (computed each frame for fullscreen layout)
+let gameCenterX = 0;
+let gameCenterY = 0;
+
+// pause
+let isPaused = false;
+
 // diagnostics
 let lastFatalError = null;
 window.onerror = function (message, source, lineno, colno, error) {
@@ -14,6 +24,7 @@ window.onerror = function (message, source, lineno, colno, error) {
 
 
 let gameState = 'PLAYING'; // PLAYING, ROUND_END, MATCH_END
+let uiMode = 'B'; // 'A' = minimal (track only), 'B' = full UI (HUD, overlays, etc.)
 let obstacles = [];
 let players = [];
 let winner = null;
@@ -30,17 +41,28 @@ let weatherPhaseDuration = 0;
 let weatherPhaseProgress = 0;
 let roundTransitionTimer = 0;
 let previousRoundTerrainSignature = '';
+let terrainNodeSet = new Set(); // rebuilt after obstacle generation for O(1) lookups
 
 let redShipWins = 0;
 let greenShipWins = 0;
 let roundsPlayed = 0;
+let roundResults = []; // per-round winner: 'red ship' or 'green ship'
 
 // ===========================
 // OBSTACLE GENERATION
 // ===========================
 
+function rebuildTerrainSet() {
+  terrainNodeSet.clear();
+  for (let obs of obstacles) {
+    for (let nodeObj of obs.nodes) {
+      terrainNodeSet.add(nodeObj.index);
+    }
+  }
+}
+
 function isTerrainNode(node) {
-  return obstacles.some(obs => obs.nodes.some(n => n.index === node));
+  return terrainNodeSet.has(node);
 }
 
 function generateObstacles() {
@@ -49,7 +71,6 @@ function generateObstacles() {
   let forbiddenNodes = [treasureNode, ...playerNodes, players[0].startNode, players[1].startNode];
   let maxAttempts = 1000;
   let currentPixels = 0;
-  let nextId = 1;
 
   for (let attempts = 0; attempts < maxAttempts && currentPixels < currentTotalPixels; attempts++) {
     let remainingPixels = currentTotalPixels - currentPixels;
@@ -77,7 +98,6 @@ function generateObstacles() {
 
     if (!tooClose) {
       obstacles.push({
-        id: nextId++,
         nodes: blob.map(n => ({ index: n }))
       });
       currentPixels += blobSize;
@@ -87,11 +107,7 @@ function generateObstacles() {
 
 function getTerrainSignature() {
   let nodes = new Array(CONFIG.TRACK_LEN).fill('0');
-  for (let obs of obstacles) {
-    for (let nodeObj of obs.nodes) {
-      nodes[nodeObj.index] = '1';
-    }
-  }
+  for (let n of terrainNodeSet) nodes[n] = '1';
   return nodes.join('');
 }
 
@@ -101,6 +117,7 @@ function generateDistinctRoundTerrain() {
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     generateObstacles();
+    rebuildTerrainSet();
     nextSignature = getTerrainSignature();
 
     if (previousRoundTerrainSignature === '' || nextSignature !== previousRoundTerrainSignature) {
@@ -224,23 +241,10 @@ function resetWeatherCycle(extraCalmMs = 0) {
 }
 
 function resolveStormStrike() {
-  let p1InOcean = !players[0].isHidden(obstacles);
-  let p2InOcean = !players[1].isHidden(obstacles);
-
-  // Treasure that is currently in ocean gets swept away by the storm.
+  // Treasure in open ocean gets swept away by the storm.
+  // Player kills are handled by the continuous per-frame storm check in draw().
   if (treasureNode !== -1 && !isTerrainNode(treasureNode)) {
     scheduleTreasureSpawn();
-  }
-
-  if (p1InOcean) players[0].isAlive = false;
-  if (p2InOcean) players[1].isAlive = false;
-
-  if (p1InOcean && p2InOcean) {
-    concludeRound('draw', 'both ships were lost in the storm');
-  } else if (p1InOcean) {
-    concludeRound(players[1].name, 'survived the storm');
-  } else if (p2InOcean) {
-    concludeRound(players[0].name, 'survived the storm');
   }
 }
 
@@ -256,9 +260,15 @@ function updateWeather(dt) {
   }
 
   if (weatherState === 'STORM_COMING') {
-    resolveStormStrike();
-    if (gameState === 'PLAYING') {
+    let stormHappens = Math.random() < CONFIG.STORM_STRIKE_CHANCE;
+
+    if (stormHappens) {
+      resolveStormStrike();
+      // always enter STORM state so sound + visuals play even if the round ended
       setWeatherState('STORM');
+    } else {
+      // storm dissipates — back to calm
+      setWeatherState('CALM');
     }
     return;
   }
@@ -303,6 +313,7 @@ function startMatch() {
   redShipWins = 0;
   greenShipWins = 0;
   roundsPlayed = 0;
+  roundResults = [];
   startRound();
 }
 
@@ -312,6 +323,7 @@ function concludeRound(roundWinner, reason, startNextRoundNow = false, extraCalm
   if (roundWinner === 'red ship') redShipWins += 1;
   if (roundWinner === 'green ship') greenShipWins += 1;
 
+  roundResults.push(roundWinner);
   roundsPlayed += 1;
 
   let winsToClaim = getWinsToClaim();
@@ -330,6 +342,11 @@ function concludeRound(roundWinner, reason, startNextRoundNow = false, extraCalm
       winner = 'draw';
       endReason = 'match tied after five rounds';
     }
+
+    // mute all weather sounds on match end
+    Object.values(weatherSounds).forEach(s => {
+      try { if (s && typeof s.setVolume === 'function') s.setVolume(0); } catch (_) { }
+    });
 
     return;
   }
@@ -352,7 +369,8 @@ function checkRoundWinConditions() {
   let p2Win = players[1].isAlive && players[1].checkTreasureWin(treasureNode);
 
   if (p1Win && p2Win) {
-    concludeRound('draw', 'both ships seized the treasure', true, CONFIG.CALM_EXTRA_ON_TREASURE_MS);
+    // both grabbed at once: no score, restart the round
+    startRound(CONFIG.CALM_EXTRA_ON_TREASURE_MS);
   } else if (p1Win) {
     concludeRound('red ship', 'seized the treasure', true, CONFIG.CALM_EXTRA_ON_TREASURE_MS);
   } else if (p2Win) {
@@ -373,22 +391,27 @@ function updateRoundTransition(dt) {
 // P5.JS MAIN FUNCTIONS
 // ===========================
 
+function preload() {
+  uiBackgroundImg = loadImage('public/background.png');
+  uiBorderImg = loadImage('public/border.png');
+  uiCompassImg = loadImage('public/compass.png');
+}
+
 function setup() {
-  console.log('setup() start');
   try {
-    createCanvas(CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+    createCanvas(windowWidth, windowHeight);
     textAlign(CENTER, CENTER);
     textFont('Consolas');
 
     // load sounds non‑blocking; failures won't prevent setup
     if (typeof soundFormats === 'function') {
-      try { soundFormats('mp3'); } catch (_) { }
+      try { soundFormats('mp3', 'm4a'); } catch (_) { }
     }
     if (typeof loadSound === 'function') {
       try {
         weatherSounds.CALM = loadSound('public/calm.mp3', () => { }, err => console.warn(err));
         weatherSounds.STORM_COMING = loadSound('public/storm coming.mp3', () => { }, err => console.warn(err));
-        weatherSounds.STORM = loadSound('public/storm.mp3', () => { }, err => console.warn(err));
+        weatherSounds.STORM = loadSound('public/storm.m4a', () => { }, err => console.warn(err));
       } catch (e) {
         console.warn('exception loading sounds in setup', e);
       }
@@ -418,18 +441,13 @@ function draw() {
     noLoop();
     return;
   }
-  console.log('draw() frame', frameCount);
   background(CONFIG.COLORS.background);
-  // debug marker: small red square so we know draw() executed
-  fill(255, 0, 0);
-  rect(5, 5, 10, 10);
 
-  let dt = deltaTime / 1000;
+  // compute game center each frame (responsive to resize)
+  gameCenterX = width / 2;
+  gameCenterY = height / 2;
 
-  // debugging: if both ships are concealed by terrain, log their positions
-  if (players.length >= 2 && players[0].isHidden(obstacles) && players[1].isHidden(obstacles)) {
-    console.log('both ships on terrain at nodes', players[0].getCurrentNode(), players[1].getCurrentNode());
-  }
+  let dt = Math.min(deltaTime / 1000, 0.1); // cap to 100ms to discard time spent paused
 
   if (gameState === 'PLAYING') {
     updateWeather(dt);
@@ -438,7 +456,20 @@ function draw() {
       updateTreasureSpawn(dt);
 
       for (let player of players) {
-        player.update(dt, obstacles, weatherState, weatherPhaseProgress);
+        player.update(dt, weatherState, weatherPhaseProgress);
+      }
+
+      // continuous storm kill: any player at sea during STORM dies instantly
+      if (weatherState === 'STORM') {
+        for (let player of players) {
+          if (player.isAlive && !player.isHidden()) {
+            player.isAlive = false;
+          }
+        }
+        // both dead: no score, restart the round
+        if (!players[0].isAlive && !players[1].isAlive) {
+          startRound();
+        }
       }
 
       checkRoundWinConditions();
@@ -447,22 +478,66 @@ function draw() {
     updateRoundTransition(dt);
   }
 
+  // Mode B: draw fullscreen UI layers behind game (bottom-up Z order)
+  if (uiMode === 'B') {
+    drawWeatherBackground(uiBackgroundImg, weatherState, weatherPhaseProgress); // lowest layer + darken/flash
+    drawWeatherCompass(uiCompassImg, weatherState, weatherPhaseProgress);       // middle layer + shake
+    image(uiBorderImg, 0, 0, width, height);                                    // top UI layer (static)
+  }
+  drawScoreboard(roundResults, CONFIG.BEST_OF_ROUNDS);                           // scoreboard always visible
+  drawWeatherRain(weatherState, weatherPhaseProgress);                           // rain always visible
+
+  // game elements drawn on top of all UI layers
   drawTrack(weatherState, weatherPhaseProgress);
   drawObstacles(obstacles);
   if (treasureNode !== -1) drawTreasure(treasureNode);
   players.forEach(p => p.draw());
-  drawHUD(redShipWins, greenShipWins, roundsPlayed + (gameState === 'PLAYING' ? 1 : 0));
 
-  if (gameState === 'ROUND_END') {
-    drawRoundResult(winner, endReason);
-  } else if (gameState === 'MATCH_END') {
-    drawEndScreen(winner, endReason);
+  // draw victory ribbons on match end
+  if (gameState === 'MATCH_END' && winner) {
+    drawVictoryRibbons(winner);
   }
 }
 
 function keyPressed() {
-  if (gameState === 'MATCH_END' && (key === 'r' || key === 'R')) {
+  // Toggle pause — must be checked before the isPaused guard
+  if (key === 'p' || key === 'P') {
+    isPaused = !isPaused;
+    if (isPaused) {
+      // mute all weather sounds
+      Object.values(weatherSounds).forEach(s => {
+        try { if (s && typeof s.setVolume === 'function') s.setVolume(0); } catch (_) { }
+      });
+      // draw pause overlay on the current frame, then freeze rendering
+      noStroke();
+      fill(0, 0, 0, CONFIG.PAUSE_DIM_ALPHA);
+      rect(0, 0, width, height);
+      fill(255, 255, 255, 200);
+      textSize(32);
+      text('PAUSED', width / 2, height / 2);
+      noLoop();
+    } else {
+      // restore rendering and correct sound volume
+      loop();
+      setWeatherState(weatherState);
+    }
+  }
+
+  // While paused, ignore all other keys
+  if (isPaused) return;
+
+  if (key === 'r' || key === 'R') {
     startMatch();
+  }
+
+  // Toggle fullscreen
+  if (key === 'f' || key === 'F') {
+    fullscreen(!fullscreen());
+  }
+
+  // Toggle UI mode: A = minimal, B = full
+  if (key === 'u' || key === 'U') {
+    uiMode = uiMode === 'A' ? 'B' : 'A';
   }
 
   // Ensure audio starts if blocked by browser policy
@@ -475,4 +550,8 @@ function keyPressed() {
   if (keyCode === LEFT_ARROW || keyCode === RIGHT_ARROW) {
     return false;
   }
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
 }
