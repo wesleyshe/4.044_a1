@@ -10,11 +10,11 @@ const CONFIG = {
   PIXEL_SIZE: 18,          // Size of each square pixel on the track
 
   // Movement Physics
-  ACCEL: 200,              // Acceleration when pressing keys
+  ACCEL: 2000,              // Acceeration when pressing keys
   INERTIA: 0.95,           // Momentum (0-1, higher = more slippery/momentum, lower = tighter control)
-  MAX_SPEED: 10,           // Maximum velocity
+  MAX_SPEED: 40,           // Maximum velocity
   // ships move more slowly on terrain; all other physics (inertia, drift) remain unchanged
-  TERRAIN_SPEED_MULTIPLIER: 0.5, // Speed multiplier while sailing on brown terrain (50% speed)
+  TERRAIN_SPEED_MULTIPLIER: 1.0, // Speed mufltiplier while sailing on brown terrain (50% speed)
 
   // Obstacles
   // starting count of terrain pixels; will be multiplied by REDUCTION_FACTOR when a round begins
@@ -26,9 +26,9 @@ const CONFIG = {
 
   // Weather Phase Timing (in milliseconds)
   CALM_MIN_MS: 2000,                 // Calm phase min duration
-  CALM_MAX_MS: 4000,                 // Calm phase max duration
+  CALM_MAX_MS: 3500,                 // Calm phase max duration
   STORM_COMING_MIN_MS: 2000,         // Storm-coming phase min duration
-  STORM_COMING_MAX_MS: 4000,         // Storm-coming phase max duration
+  STORM_COMING_MAX_MS: 3500,         // Storm-coming phase max duration
   STORM_MIN_MS: 3000,                // Storm phase min duration
   STORM_MAX_MS: 6000,                // Storm phase max duration
 
@@ -115,7 +115,10 @@ const CONFIG = {
   SOUND_VOLUMES: {
     CALM: 0.5,
     STORM_COMING: 0.5,
-    STORM: 0.5
+    STORM: 0.5,
+    CELEBRATION: 0.75,
+    TREASURESPAWN: 0.5
+
   },
 
   // Colors
@@ -136,3 +139,4 @@ const CONFIG = {
   PLAYER2_LEFT: 'ArrowLeft',
   PLAYER2_RIGHT: 'ArrowRight'
 };
+

@@ -4,6 +4,8 @@
 
 // audio handles (loaded in setup to avoid preload issues)
 let weatherSounds = {};
+let celebrationSound = null;
+let treasureSpawnSound = null;
 
 // UI overlay images (loaded in preload)
 let uiBackgroundImg, uiBorderImg, uiCompassImg;
@@ -185,6 +187,13 @@ function pickTreasureNode() {
   let usable = validZone.length > 0 ? validZone : candidates;
 
   treasureNode = usable[Math.floor(Math.random() * usable.length)];
+
+  try {
+    if (treasureSpawnSound && typeof treasureSpawnSound.play === 'function') {
+      treasureSpawnSound.setVolume(CONFIG.SOUND_VOLUMES.TREASURESPAWN !== undefined ? CONFIG.SOUND_VOLUMES.TREASURESPAWN : 0.5);
+      treasureSpawnSound.play();
+    }
+  } catch (_) { }
 }
 
 function updateTreasureSpawn(dt) {
@@ -348,6 +357,14 @@ function concludeRound(roundWinner, reason, startNextRoundNow = false, extraCalm
       try { if (s && typeof s.setVolume === 'function') s.setVolume(0); } catch (_) { }
     });
 
+    // play celebration once
+    try {
+      if (celebrationSound && typeof celebrationSound.play === 'function') {
+        celebrationSound.setVolume(CONFIG.SOUND_VOLUMES.CELEBRATION !== undefined ? CONFIG.SOUND_VOLUMES.CELEBRATION : 0.5);
+        celebrationSound.play();
+      }
+    } catch (_) { }
+
     return;
   }
 
@@ -412,6 +429,8 @@ function setup() {
         weatherSounds.CALM = loadSound('public/calm.mp3', () => { }, err => console.warn(err));
         weatherSounds.STORM_COMING = loadSound('public/storm coming.mp3', () => { }, err => console.warn(err));
         weatherSounds.STORM = loadSound('public/storm.m4a', () => { }, err => console.warn(err));
+        celebrationSound = loadSound('public/celebration.mp3', () => { }, err => console.warn(err));
+        treasureSpawnSound = loadSound('public/treasurespawn.mp3', () => { }, err => console.warn(err));
       } catch (e) {
         console.warn('exception loading sounds in setup', e);
       }

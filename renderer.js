@@ -227,7 +227,8 @@ function _ensureRibbons(count) {
       x: Math.random(),
       y: Math.random(),
       seed: Math.random(),
-      swayOffset: Math.random() * Math.PI * 2
+      swayOffset: Math.random() * Math.PI * 2,
+      angle: (Math.random() - 0.5) * 1.4  // random tilt: -40° to +40° in radians
     });
   }
 }
@@ -275,22 +276,26 @@ function drawVictoryRibbons(winnerName) {
     stroke(ribbonColor[0] * bright, ribbonColor[1] * bright, ribbonColor[2] * bright, alpha);
     strokeWeight(w * (0.6 + r.seed * 0.4));
 
-    // draw curly ribbon as a series of connected curve segments
+    // draw curly ribbon as a series of connected curve segments, rotated at its tilt angle
     let curlPhase = r.swayOffset + t * (1.5 + r.seed);
     let thisCurlAmp = curlAmp * (0.6 + r.seed * 0.8);
     let steps = 12;
 
+    push();
+    translate(baseX, baseY);
+    rotate(r.angle);
     beginShape();
     for (let s = 0; s <= steps; s++) {
       let frac = s / steps;
-      let py = baseY + frac * len;
+      let py = frac * len;
       let curlWave = Math.sin(frac * curlSegs * TWO_PI + curlPhase) * thisCurlAmp;
-      let px = baseX + curlWave;
+      let px = curlWave;
       curveVertex(px, py);
       // duplicate first and last for catmull-rom spline ends
       if (s === 0 || s === steps) curveVertex(px, py);
     }
     endShape();
+    pop();
   }
 }
 
